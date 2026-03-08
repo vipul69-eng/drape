@@ -1,0 +1,23 @@
+FROM node:20-alpine AS base
+
+WORKDIR /app
+
+# Install deps first for layer caching
+COPY package.json package-lock.json* ./
+RUN npm ci --production --ignore-scripts && npm cache clean --force
+
+# Copy source
+COPY server/ ./server/
+COPY public/ ./public/
+
+# Non-root user for security
+RUN addgroup -g 1001 -S drape && \
+    adduser -S drape -u 1001 -G drape
+USER drape
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:3000/api/health || exit 1
+
+CMD ["node", "server/index.js"]
