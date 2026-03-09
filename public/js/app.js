@@ -1,988 +1,1119 @@
-/**
- * app.js — DRAPE application controller
- *
- * Manages UI state, onboarding flow, wardrobe rendering,
- * chat, planner, analytics, and device pairing.
- * Talks to server exclusively through API module (api.js).
- */
+/* ═══════════════════════════════════════
+   DRAPE — Application Controller
+   Visual chat · Wardrobe cards · Agentic
+═══════════════════════════════════════ */
+const $ = (id) => document.getElementById(id),
+  $$ = (s) => document.querySelectorAll(s);
 
-// ══════════ STATE ══════════
-const state = {
+// ── Helper: create icon element ──
+function ic(name, cls) {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("class", "ic" + (cls ? " " + cls : ""));
+  const u = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  u.setAttributeNS("http://www.w3.org/1999/xlink", "href", "#ic-" + name);
+  s.appendChild(u);
+  return s;
+}
+function icHTML(name, cls) {
+  return (
+    '<span class="ic' +
+    (cls ? " " + cls : "") +
+    '"><svg><use href="#ic-' +
+    name +
+    '"/></svg></span>'
+  );
+}
+
+// ── State ──
+const S = {
   deviceId: null,
   profile: null,
   wardrobe: [],
   chatHistory: [],
-  selectedChips: {},
-  itemPhotoB64: null,
-  profilePhotoFull: null,
-  profileAnalysis: null,
-  pairInterval: null,
-  isOnline: false,
+  chips: {},
+  itemPhoto: null,
+  profilePhoto: null,
+  online: false,
+  pairInt: null,
+};
+const ICON_MAP = {
+  Topwear: "hanger",
+  Bottomwear: "scissors",
+  Shoes: "briefcase",
+  Outerwear: "hanger",
+  Accessories: "sparkle",
 };
 
-const CAT_ICON = {
-  Topwear: "👕",
-  Bottomwear: "👖",
-  Shoes: "👟",
-  Outerwear: "🧥",
-  Accessories: "⌚",
-};
-
-// ══════════ UTILITIES ══════════
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+// ── Utils ──
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s || "";
+  return d.innerHTML;
 }
-
-/** Escape HTML to prevent XSS in innerHTML injections */
-function esc(str) {
-  const div = document.createElement("div");
-  div.textContent = str || "";
-  return div.innerHTML;
-}
-
-function showToast(msg) {
-  const t = document.getElementById("toast");
-  t.textContent = msg;
-  t.classList.add("show");
-  setTimeout(() => t.classList.remove("show"), 2800);
-}
-
-function showSync(status) {
-  const el = document.getElementById("syncIndicator");
-  const dot = document.getElementById("syncDot");
-  const txt = document.getElementById("syncText");
-  el.classList.add("show");
-  dot.className =
-    "dot " +
-    (status === "syncing" ? "orange" : status === "error" ? "red" : "green");
-  txt.textContent =
-    status === "syncing"
-      ? "syncing…"
-      : status === "error"
-      ? "offline"
-      : "synced";
-  if (status !== "syncing") setTimeout(() => el.classList.remove("show"), 2500);
-}
-
-function compressImage(file, maxDim, quality) {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
+function compress(file, max, q) {
+  return new Promise((r) => {
+    const rd = new FileReader();
+    rd.onload = (e) => {
       const img = new Image();
       img.onload = () => {
-        const canvas = document.createElement("canvas");
+        const c = document.createElement("canvas");
         let w = img.width,
           h = img.height;
-        if (w > maxDim || h > maxDim) {
+        if (w > max || h > max) {
           if (w > h) {
-            h = Math.round((h * maxDim) / w);
-            w = maxDim;
+            h = Math.round((h * max) / w);
+            w = max;
           } else {
-            w = Math.round((w * maxDim) / h);
-            h = maxDim;
+            w = Math.round((w * max) / h);
+            h = max;
           }
         }
-        canvas.width = w;
-        canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL("image/jpeg", quality));
+        c.width = w;
+        c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        r(c.toDataURL("image/jpeg", q));
       };
       img.src = e.target.result;
     };
-    reader.readAsDataURL(file);
+    rd.readAsDataURL(file);
   });
 }
-
-function colorNameToHex(name) {
-  const map = {
+function c2hex(n) {
+  const m = {
     white: "#f5f5f5",
     black: "#1a1a1a",
     navy: "#1e3a5f",
     blue: "#3b82f6",
-    lightblue: "#93c5fd",
     red: "#ef4444",
-    burgundy: "#7f1d1d",
-    maroon: "#6b2132",
     green: "#22c55e",
-    sage: "#7a9b76",
-    olive: "#6b7c3a",
     khaki: "#c8b468",
     beige: "#e8d5b7",
     cream: "#fdf8e8",
-    camel: "#c2956c",
     brown: "#8b5e3c",
-    tan: "#d2a679",
     grey: "#9ca3af",
     gray: "#9ca3af",
     charcoal: "#4b5563",
     yellow: "#fbbf24",
-    mustard: "#d97706",
     orange: "#f97316",
     pink: "#ec4899",
-    lavender: "#a78bfa",
     purple: "#8b5cf6",
     terracotta: "#c4622d",
     rust: "#b45309",
+    maroon: "#6b2132",
+    sage: "#7a9b76",
+    olive: "#6b7c3a",
+    camel: "#c2956c",
+    tan: "#d2a679",
+    lavender: "#a78bfa",
+    burgundy: "#7f1d1d",
+    mustard: "#d97706",
   };
-  const lower = (name || "").toLowerCase().replace(/\s+/g, "").split("/")[0];
-  for (const k in map) {
-    if (lower.includes(k)) return map[k];
-  }
+  const l = (n || "").toLowerCase().replace(/\s/g, "");
+  for (const k in m) if (l.includes(k)) return m[k];
   return "#c8b468";
 }
 
-// ══════════ BOOT SEQUENCE ══════════
-async function boot() {
-  const loadBar = document.getElementById("loadBar");
-  const loadStatus = document.getElementById("loadStatus");
-  const loadDeviceId = document.getElementById("loadDeviceId");
-
-  // Step 1: Device identity
-  loadBar.style.width = "20%";
-  loadStatus.textContent = "Generating device identity…";
-  state.deviceId = API.getDeviceId();
-  loadDeviceId.textContent = `Device: ${state.deviceId.slice(0, 8)}…`;
-  await sleep(250);
-
-  // Step 2: Try connecting to server
-  loadBar.style.width = "40%";
-  loadStatus.textContent = "Connecting to server…";
-
-  let serverOnline = false;
-  try {
-    const health = await API.health();
-    if (health.status === "ok") serverOnline = true;
-  } catch (_) {}
-
-  if (serverOnline) {
-    // ── Online mode: load from DB ──
-    loadBar.style.width = "65%";
-    loadStatus.textContent = "Loading profile…";
-    try {
-      const profileData = await API.getProfile();
-      state.profile = profileData.profile;
-    } catch (e) {
-      console.warn("[boot] Profile load failed:", e.message);
-    }
-
-    loadBar.style.width = "85%";
-    loadStatus.textContent = "Loading wardrobe…";
-    try {
-      const wardrobeData = await API.getWardrobe();
-      state.wardrobe = wardrobeData.items || [];
-    } catch (_) {
-      state.wardrobe = [];
-    }
-
-    state.isOnline = true;
-  } else {
-    // ── Offline mode: skip DB, use local-only ──
-    loadBar.style.width = "80%";
-    loadStatus.textContent = "Offline mode — data won't persist";
-    state.isOnline = false;
-    await sleep(600);
-  }
-
-  loadBar.style.width = "100%";
-  loadStatus.textContent = state.profile
-    ? "Welcome back!"
-    : "Let's get started!";
-  await sleep(400);
-
-  // Dismiss loading screen → show onboarding or app
-  document.getElementById("loadingScreen").classList.add("fade");
+// ── Toast system (auto-dismiss, slides out) ──
+function toast(msg, type) {
+  const wrap = $("toastWrap");
+  const el = document.createElement("div");
+  el.className = "toast-item" + (type === "error" ? " error" : "");
+  el.innerHTML =
+    icHTML(type === "error" ? "x" : "check", "ic-sm") + " " + esc(msg);
+  wrap.appendChild(el);
   setTimeout(() => {
-    document.getElementById("loadingScreen").style.display = "none";
-    if (state.profile) {
-      launchApp();
-    } else {
-      document.getElementById("onboarding").classList.add("show");
-    }
-  }, 400);
+    el.classList.add("out");
+    setTimeout(() => el.remove(), 300);
+  }, 2400);
 }
 
-// ══════════ LAUNCH APP ══════════
-function launchApp() {
-  document.getElementById("onboarding").classList.remove("show");
-  document.getElementById("app").classList.add("visible");
-  updateHeroName();
-  updateNavAvatar();
+function showSync(s) {
+  const e = $("syncIndicator"),
+    d = $("syncDot"),
+    t = $("syncText");
+  e.classList.add("show");
+  d.className =
+    "sync-dot " +
+    (s === "syncing" ? "orange" : s === "error" ? "red" : "green");
+  t.textContent =
+    s === "syncing" ? "syncing…" : s === "error" ? "offline" : "synced";
+  if (s !== "syncing") setTimeout(() => e.classList.remove("show"), 2500);
+}
+
+// ── Boot ──
+async function boot() {
+  const bar = $("loadBar"),
+    st = $("loadStatus"),
+    did = $("loadDeviceId");
+  bar.style.width = "20%";
+  st.textContent = "Generating device identity…";
+  S.deviceId = API.getDeviceId();
+  did.textContent = "Device: " + S.deviceId.slice(0, 8) + "…";
+  await sleep(200);
+  bar.style.width = "40%";
+  st.textContent = "Connecting…";
+  try {
+    const h = await API.health();
+    if (h.status === "ok") S.online = true;
+  } catch (_) {}
+  if (S.online) {
+    bar.style.width = "60%";
+    st.textContent = "Loading profile…";
+    try {
+      S.profile = (await API.getProfile()).profile;
+    } catch (_) {}
+    bar.style.width = "80%";
+    st.textContent = "Loading wardrobe…";
+    try {
+      S.wardrobe = (await API.getWardrobe()).items || [];
+    } catch (_) {
+      S.wardrobe = [];
+    }
+  } else {
+    bar.style.width = "80%";
+    st.textContent = "Offline mode";
+    await sleep(400);
+  }
+  bar.style.width = "100%";
+  st.textContent = S.profile ? "Welcome back!" : "Let's get started!";
+  await sleep(350);
+  $("loadingScreen").classList.add("fade");
+  setTimeout(() => {
+    $("loadingScreen").style.display = "none";
+    if (S.profile) launch();
+    else $("onboarding").classList.add("show");
+  }, 400);
+}
+function launch() {
+  $("onboarding").classList.remove("show");
+  $("app").classList.add("visible");
+  updateHero();
+  updateAvatar();
   renderWardrobe();
   renderAnalytics();
   loadProfilePage();
-  showSync("synced");
+  if (S.online) showSync("synced");
 }
 
-// ══════════ ONBOARDING ══════════
+// ── Onboarding ──
 function goObStep(n) {
   if (n === 3) {
-    const name = document.getElementById("ob-name").value.trim();
-    if (!name) {
-      showToast("Please enter your name to continue");
-      document.getElementById("ob-name").focus();
+    const v = $("ob-name").value.trim();
+    if (!v) {
+      toast("Please enter your name", "error");
+      $("ob-name").focus();
       return;
     }
   }
-  document
-    .querySelectorAll(".ob-step")
-    .forEach((s) => s.classList.remove("active"));
-  document.getElementById("ob-step-" + n).classList.add("active");
+  $$(".ob-step").forEach((s) => s.classList.remove("active"));
+  $("ob-step-" + n).classList.add("active");
   window.scrollTo(0, 0);
 }
-
-function selectChip(el, group) {
-  const container = el.closest(".chip-group");
-  container
+function handleChipClick(el) {
+  const g = el.dataset.chip;
+  if (!g) return;
+  el.closest(".chip-group")
     .querySelectorAll(".chip-pill")
     .forEach((c) => c.classList.remove("selected"));
   el.classList.add("selected");
-  state.selectedChips[group] = el.textContent.trim();
+  S.chips[g] = el.textContent.trim();
 }
-
-function handleProfilePhoto(e) {
-  const file = e.target.files[0];
-  if (!file) return;
-  compressImage(file, 600, 0.7).then((dataUrl) => {
-    const zone = document.getElementById("profilePhotoZone");
-    zone.innerHTML = `<img src="${dataUrl}" alt="Profile"/><div class="photo-overlay"><span>🔄 Change</span></div>`;
-    zone.classList.add("has-photo");
-    state.profilePhotoFull = dataUrl;
-
-    // Trigger AI body analysis via server
-    analyzeProfileBody(dataUrl);
-  });
-}
-
-async function analyzeProfileBody(dataUrl) {
-  try {
-    const data = await API.analyzeBody(dataUrl);
-    if (data.analysis) {
-      state.profileAnalysis = data.analysis;
-      // Auto-fill build dropdown
-      if (data.analysis.build) {
-        const sel = document.getElementById("ob-build");
-        for (const o of sel.options) {
-          if (
-            o.value &&
-            data.analysis.build
-              .toLowerCase()
-              .includes(
-                o.value.toLowerCase().split(" ")[0].split("/")[0].trim()
-              )
-          ) {
-            sel.value = o.value;
-            break;
-          }
-        }
-      }
-      // Auto-select skin tone chip
-      if (data.analysis.skin_tone) {
-        const chips = document.querySelectorAll("#skinChips .chip-pill");
-        chips.forEach((c) => {
-          if (
-            c.textContent.toLowerCase() ===
-            data.analysis.skin_tone.toLowerCase()
-          ) {
-            c.click();
-          }
-        });
-      }
-    }
-  } catch (_) {
-    // Silent fail — photo analysis is optional
-  }
-}
-
 async function finishOnboarding() {
-  const name = document.getElementById("ob-name").value.trim();
+  const name = $("ob-name").value.trim();
   if (!name) {
     goObStep(2);
-    showToast("Please tell us your name first");
+    toast("Enter your name first", "error");
     return;
   }
-
-  const btn = document.getElementById("finishBtn");
-  btn.disabled = true;
-  btn.textContent = "Saving…";
-
-  state.profile = {
+  $("finishBtn").disabled = true;
+  $("finishBtn").textContent = "Saving…";
+  S.profile = {
     name,
-    age: document.getElementById("ob-age").value || null,
-    gender: document.getElementById("ob-gender").value,
-    height: document.getElementById("ob-height").value,
-    build: document.getElementById("ob-build").value,
-    skin: state.selectedChips["skin"] || "",
-    style: state.selectedChips["style"] || "",
-    lifestyle: document.getElementById("ob-lifestyle").value,
-    location: document.getElementById("ob-location").value,
-    photo: state.profilePhotoFull || null,
-    photoAnalysis: state.profileAnalysis || null,
+    age: $("ob-age").value || null,
+    gender: $("ob-gender").value,
+    height: $("ob-height").value,
+    build: $("ob-build").value,
+    skin: S.chips.skin || "",
+    style: S.chips.style || "",
+    lifestyle: $("ob-lifestyle").value,
+    location: $("ob-location").value,
+    photo: S.profilePhoto || null,
+    photoAnalysis: null,
   };
-
-  try {
-    if (state.isOnline) {
+  if (S.online) {
+    try {
       showSync("syncing");
-      await API.saveProfile(state.profile);
+      await API.saveProfile(S.profile);
       showSync("synced");
+    } catch (_) {
+      showSync("error");
     }
-    launchApp();
-  } catch (e) {
-    showSync("error");
-    showToast("Save failed: " + e.message + " — continuing offline");
-    launchApp();
   }
+  launch();
 }
 
-// ══════════ NAVIGATION ══════════
-function showPage(name, tabEl) {
-  document
-    .querySelectorAll(".page")
-    .forEach((p) => p.classList.remove("active"));
-  document
-    .querySelectorAll(".nav-tab")
-    .forEach((t) => t.classList.remove("active"));
-  document.getElementById("page-" + name).classList.add("active");
-  if (tabEl) tabEl.classList.add("active");
+// ── Nav ──
+function showPage(name, tab) {
+  $$(".page").forEach((p) => p.classList.remove("active"));
+  $$(".nav-tab").forEach((t) => t.classList.remove("active"));
+  $$(".bottom-tab").forEach((t) => t.classList.remove("active"));
+  $("page-" + name).classList.add("active");
+  const bt = document.querySelector('.bottom-tab[data-page="' + name + '"]');
+  if (bt) bt.classList.add("active");
+  const nt = document.querySelector('.nav-tab[data-page="' + name + '"]');
+  if (nt) nt.classList.add("active");
+  if (tab && tab.classList.contains("nav-tab")) tab.classList.add("active");
   if (name === "analytics") renderAnalytics();
   if (name === "profile") loadProfilePage();
+  window.scrollTo(0, 0);
 }
-
-function updateHeroName() {
-  const p = state.profile;
+function updateHero() {
+  const p = S.profile;
   if (!p) return;
-  const h = new Date().getHours();
-  const g =
-    h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
-  const heroName = document.getElementById("heroName");
-  const heroG = document.getElementById("heroGreeting");
-  if (heroName) heroName.innerHTML = `${g}, <em>${esc(p.name)}</em>`;
-  if (heroG) heroG.textContent = "What are you wearing today?";
+  const h = new Date().getHours(),
+    g = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+  const el = $("heroName"),
+    gr = $("heroGreeting");
+  if (el) el.innerHTML = g + ", <em>" + esc(p.name) + "</em>";
+  if (gr)
+    gr.innerHTML = icHTML("sun", "ic-sm") + " What are you wearing today?";
+}
+function updateAvatar() {
+  const a = $("navAvatar"),
+    p = S.profile;
+  if (!a || !p) return;
+  if (p.photo) a.innerHTML = '<img src="' + p.photo + '" alt=""/>';
+  else if (p.name) a.textContent = p.name[0].toUpperCase();
 }
 
-function updateNavAvatar() {
-  const av = document.getElementById("navAvatar");
-  if (!av) return;
-  const p = state.profile;
-  if (p && p.photo) av.innerHTML = `<img src="${p.photo}" alt="avatar"/>`;
-  else if (p && p.name) av.textContent = p.name[0].toUpperCase();
+// ═══ AGENTIC CHAT ═══
+const ACTION_MAP = {
+  GO_WARDROBE: {
+    label: "Open Wardrobe",
+    icon: "hanger",
+    fn: () => showPage("wardrobe", null),
+  },
+  ADD_ITEM: {
+    label: "Add New Item",
+    icon: "plus",
+    fn: () => {
+      showPage("wardrobe", null);
+      setTimeout(openAddModal, 300);
+    },
+  },
+  GO_PLANNER: {
+    label: "Open Planner",
+    icon: "calendar",
+    fn: () => showPage("planner", null),
+  },
+  GO_PROFILE: {
+    label: "Edit Profile",
+    icon: "user",
+    fn: () => showPage("profile", null),
+  },
+  GO_INSIGHTS: {
+    label: "View Insights",
+    icon: "chart",
+    fn: () => showPage("analytics", null),
+  },
+};
+
+// Suggestions based on context
+const FOLLOW_UPS = {
+  outfit: [
+    "What shoes go with this?",
+    "Any accessories to add?",
+    "Show me alternatives",
+  ],
+  buy: [
+    "Where can I find these?",
+    "What brands do you recommend?",
+    "Set a budget for me",
+  ],
+  color: [
+    "Show outfits in these colors",
+    "What colors to avoid?",
+    "Seasonal color tips",
+  ],
+  general: [
+    "Plan an outfit for tonight",
+    "What am I missing?",
+    "Analyse my wardrobe",
+  ],
+};
+
+function detectContext(text) {
+  const t = text.toLowerCase();
+  if (
+    t.includes("wear") ||
+    t.includes("outfit") ||
+    t.includes("top:") ||
+    t.includes("bottom:")
+  )
+    return "outfit";
+  if (
+    t.includes("buy") ||
+    t.includes("missing") ||
+    t.includes("essential") ||
+    t.includes("add")
+  )
+    return "buy";
+  if (t.includes("color") || t.includes("colour") || t.includes("tone"))
+    return "color";
+  return "general";
 }
 
-// ══════════ CHAT ══════════
-function buildSystemPrompt() {
-  const p = state.profile || {};
-  const wStr = state.wardrobe.length
-    ? state.wardrobe
+function findMentionedItems(text) {
+  if (!S.wardrobe.length) return [];
+  const lower = text.toLowerCase();
+  return S.wardrobe
+    .filter((item) => {
+      const name = item.name.toLowerCase();
+      // Match if AI mentioned the item name (at least 2-word overlap or exact)
+      const words = name.split(/\s+/);
+      if (words.length <= 1) return lower.includes(name);
+      return (
+        words.filter((w) => w.length > 2 && lower.includes(w)).length >=
+        Math.min(2, words.length)
+      );
+    })
+    .slice(0, 6);
+}
+
+function parseActions(text) {
+  const regex = /\[ACTION:(\w+)\]/g;
+  const actions = [];
+  let m;
+  while ((m = regex.exec(text)) !== null) {
+    if (ACTION_MAP[m[1]]) actions.push(m[1]);
+  }
+  return { cleanText: text.replace(/\[ACTION:\w+\]/g, "").trim(), actions };
+}
+
+function sysPrompt() {
+  const p = S.profile || {};
+  const w = S.wardrobe.length
+    ? S.wardrobe
         .map(
           (i) =>
-            `- ${i.name} (${i.category}, ${i.color}, ${i.occasion}, ${i.season})`
+            "- " +
+            i.name +
+            " (" +
+            i.category +
+            ", " +
+            i.color +
+            ", " +
+            i.occasion +
+            ")"
         )
         .join("\n")
     : "No items yet.";
+  return `You are DRAPE, a warm personal AI stylist. Give specific, actionable fashion advice.
 
-  const analysis = p.photoAnalysis;
-
-  return `You are DRAPE, an elegant personal AI stylist. You give warm, specific, actionable fashion advice.
-
-USER:
-Name: ${p.name || "—"} | Age: ${p.age || "—"} | Gender: ${
+USER: ${p.name || "—"} | Age:${p.age || "—"} | Gender:${
     p.gender || "—"
-  } | Height: ${p.height || "—"}
-Build: ${p.build || "—"} | Skin Tone: ${p.skin || "—"} | Style: ${
-    p.style || "—"
+  } | Height:${p.height || "—"} | Build:${p.build || "—"} | Skin:${
+    p.skin || "—"
+  } | Style:${p.style || "—"} | Lifestyle:${p.lifestyle || "—"} | Location:${
+    p.location || "—"
   }
-Lifestyle: ${p.lifestyle || "—"} | Location: ${p.location || "—"}
-${
-  analysis
-    ? `AI Body Analysis: Build=${analysis.build || "—"}, Shape=${
-        analysis.body_shape || "—"
-      }, Fit Rec=${analysis.fit_recommendation || "—"}`
-    : ""
-}
 
-WARDROBE (${state.wardrobe.length} items):
-${wStr}
+WARDROBE (${S.wardrobe.length} items):
+${w}
 
 RULES:
-- ONLY suggest wardrobe items the user actually owns. Name them exactly.
-- Format outfits as: **Top:** / **Bottom:** / **Shoes:** / **Extra:**
-- Be warm, personal, and encouraging. Sound like a real stylist, not a chatbot.
-- Use the user's name occasionally.
-- Keep responses concise but complete.`;
+- Only suggest items the user owns. Name them EXACTLY as listed.
+- Format outfits: **Top:** / **Bottom:** / **Shoes:** / **Extra:**
+- Be warm, personal, use their name occasionally.
+- Keep responses concise but complete.
+
+ACTIONS: After your response, append relevant action tags on a new line:
+[ACTION:GO_WARDROBE] - when referencing their wardrobe
+[ACTION:ADD_ITEM] - when suggesting buying/adding items
+[ACTION:GO_PLANNER] - when suggesting outfit planning
+[ACTION:GO_PROFILE] - when suggesting profile updates
+[ACTION:GO_INSIGHTS] - when mentioning wardrobe analysis
+Include only genuinely relevant actions.`;
 }
 
 async function sendChat() {
-  const input = document.getElementById("chatInput");
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = "";
-  input.style.height = "auto";
-
-  renderMsg("user", text);
-  const loadEl = renderLoader();
-  document.getElementById("sendBtn").disabled = true;
-  state.chatHistory.push({ role: "user", content: text });
-
+  const inp = $("chatInput"),
+    txt = inp.value.trim();
+  if (!txt) return;
+  inp.value = "";
+  inp.style.height = "auto";
+  renderMsg("user", txt);
+  const ld = renderLoader();
+  $("sendBtn").disabled = true;
+  S.chatHistory.push({ role: "user", content: txt });
   try {
-    const messages = [
-      { role: "system", content: buildSystemPrompt() },
-      ...state.chatHistory.slice(-14),
+    const msgs = [
+      { role: "system", content: sysPrompt() },
+      ...S.chatHistory.slice(-14),
     ];
-    const data = await API.chat(messages);
-    state.chatHistory.push({ role: "assistant", content: data.reply });
-    loadEl.remove();
-    renderMsg("ai", data.reply);
+    if (S.online) {
+      const d = await API.chat(msgs);
+      const { cleanText, actions } = parseActions(d.reply);
+      S.chatHistory.push({ role: "assistant", content: cleanText });
+      ld.remove();
+      renderAIMsg(cleanText, actions);
+    } else {
+      ld.remove();
+      renderMsg("ai", "Server offline — connect for AI features.", null);
+    }
   } catch (e) {
-    loadEl.remove();
-    renderMsg("ai", "⚠ " + e.message);
+    ld.remove();
+    renderMsg("ai", "Could not reach the stylist: " + e.message, null);
   }
-  document.getElementById("sendBtn").disabled = false;
+  $("sendBtn").disabled = false;
 }
 
-function quickAsk(text) {
-  showPage("home", document.querySelector(".nav-tab"));
-  document.getElementById("chatInput").value = text;
+function quickAsk(t) {
+  showPage("home", null);
+  $("chatInput").value = t;
   sendChat();
 }
 
-function renderMsg(role, text) {
-  const container = document.getElementById("chatMessages");
-  const row = document.createElement("div");
+function renderMsg(role, txt) {
+  const c = $("chatMessages"),
+    row = document.createElement("div");
   row.className = "msg-row " + role;
-  const p = state.profile;
-
-  const ava = document.createElement("div");
-  ava.className = "msg-ava " + (role === "ai" ? "ai-ava" : "");
+  const av = document.createElement("div");
+  av.className = "msg-ava " + (role === "ai" ? "ai-ava" : "");
   if (role === "user") {
+    const p = S.profile;
     if (p && p.photo)
-      ava.innerHTML = `<img src="${p.photo}" style="width:100%;height:100%;object-fit:cover;border-radius:50%"/>`;
-    else ava.textContent = p ? p.name[0].toUpperCase() : "U";
-  } else {
-    ava.textContent = "D";
-  }
+      av.innerHTML =
+        '<img src="' +
+        p.photo +
+        '" style="width:100%;height:100%;object-fit:cover;border-radius:50%"/>';
+    else av.textContent = p ? p.name[0].toUpperCase() : "U";
+  } else av.textContent = "D";
+  const b = document.createElement("div");
+  b.className = "msg-bubble";
+  b.innerHTML = txt
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\n/g, "<br>");
+  row.appendChild(av);
+  row.appendChild(b);
+  c.appendChild(row);
+  c.scrollTop = c.scrollHeight;
+}
 
-  const bubble = document.createElement("div");
-  bubble.className = "msg-bubble";
-  bubble.innerHTML = text
+function renderAIMsg(txt, actions) {
+  const c = $("chatMessages"),
+    row = document.createElement("div");
+  row.className = "msg-row ai";
+  const av = document.createElement("div");
+  av.className = "msg-ava ai-ava";
+  av.textContent = "D";
+  const b = document.createElement("div");
+  b.className = "msg-bubble";
+  b.innerHTML = txt
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
     .replace(/\n/g, "<br>");
 
-  row.appendChild(ava);
-  row.appendChild(bubble);
-  container.appendChild(row);
-  container.scrollTop = container.scrollHeight;
-  return row;
+  // Find wardrobe items mentioned in the response → show visual cards
+  const mentioned = findMentionedItems(txt);
+  if (mentioned.length) {
+    const strip = document.createElement("div");
+    strip.className = "outfit-items-row";
+    mentioned.forEach((item) => {
+      const card = document.createElement("div");
+      card.className = "outfit-item-card";
+      card.dataset.filter = item.category;
+      card.innerHTML =
+        (item.photo
+          ? '<div class="card-thumb"><img src="' +
+            item.photo +
+            '" alt="' +
+            esc(item.name) +
+            '"/></div>'
+          : '<div class="card-thumb">' +
+            icHTML(ICON_MAP[item.category] || "hanger", "ic-lg") +
+            "</div>") +
+        '<div class="card-label">' +
+        esc(item.name) +
+        '</div><div class="card-meta">' +
+        esc(item.color) +
+        "</div>";
+      strip.appendChild(card);
+    });
+    b.appendChild(strip);
+  }
+
+  // Action buttons
+  if (actions && actions.length) {
+    const bar = document.createElement("div");
+    bar.className = "action-bar";
+    actions.forEach((key) => {
+      const a = ACTION_MAP[key];
+      if (!a) return;
+      const btn = document.createElement("button");
+      btn.className = "action-btn";
+      btn.dataset.action = key;
+      btn.innerHTML = icHTML(a.icon, "ic-sm") + " " + a.label;
+      bar.appendChild(btn);
+    });
+    b.appendChild(bar);
+  }
+
+  // Suggestion chips (follow-up questions)
+  const ctx = detectContext(txt);
+  const suggestions = FOLLOW_UPS[ctx] || FOLLOW_UPS.general;
+  const chips = document.createElement("div");
+  chips.className = "suggestion-chips";
+  suggestions.forEach((s) => {
+    const chip = document.createElement("button");
+    chip.className = "suggestion-chip";
+    chip.dataset.ask = s;
+    chip.innerHTML = icHTML("sparkle", "ic-sm") + " " + s;
+    chips.appendChild(chip);
+  });
+  b.appendChild(chips);
+
+  row.appendChild(av);
+  row.appendChild(b);
+  c.appendChild(row);
+  c.scrollTop = c.scrollHeight;
 }
 
 function renderLoader() {
-  const container = document.getElementById("chatMessages");
-  const row = document.createElement("div");
-  row.className = "msg-row ai";
-  row.innerHTML = `<div class="msg-ava ai-ava">D</div><div class="msg-bubble"><div class="dots"><span></span><span></span><span></span></div></div>`;
-  container.appendChild(row);
-  container.scrollTop = container.scrollHeight;
-  return row;
+  const c = $("chatMessages"),
+    r = document.createElement("div");
+  r.className = "msg-row ai";
+  r.innerHTML =
+    '<div class="msg-ava ai-ava">D</div><div class="msg-bubble"><div class="dots"><span></span><span></span><span></span></div></div>';
+  c.appendChild(r);
+  c.scrollTop = c.scrollHeight;
+  return r;
 }
 
-// ══════════ WARDROBE ══════════
-let wardrobeFilter = "All";
-
-function filterWardrobe(cat, el) {
-  wardrobeFilter = cat;
-  document
-    .querySelectorAll(".filter-pill")
-    .forEach((p) => p.classList.remove("active"));
-  el.classList.add("active");
-  renderWardrobe();
-}
-
+// ── Wardrobe ──
+let wFilter = "All";
 function renderWardrobe() {
-  const grid = document.getElementById("clothesGrid");
-  if (!grid) return;
+  const g = $("clothesGrid");
+  if (!g) return;
   const items =
-    wardrobeFilter === "All"
-      ? state.wardrobe
-      : state.wardrobe.filter((i) => i.category === wardrobeFilter);
-
+    wFilter === "All"
+      ? S.wardrobe
+      : S.wardrobe.filter((i) => i.category === wFilter);
   if (!items.length) {
-    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;padding:48px 24px;">
-      <div class="empty-state-icon">${
-        wardrobeFilter === "All" ? "👗" : CAT_ICON[wardrobeFilter] || "👗"
-      }</div>
-      <div class="empty-state-title">Nothing here yet</div>
-      <div class="empty-state-sub">Tap "+ Add Item" to start building your wardrobe</div></div>`;
+    g.innerHTML =
+      '<div class="empty-state" style="grid-column:1/-1">' +
+      icHTML(ICON_MAP[wFilter] || "hanger", "ic-xl") +
+      '<div class="empty-state-title">Nothing here yet</div><div class="empty-state-sub">Tap "+ Add Item" to start building your wardrobe</div></div>';
     return;
   }
-
-  grid.innerHTML = items
+  g.innerHTML = items
     .map(
-      (item) => `
-    <div class="clothes-card">
-      <div class="clothes-card-del" onclick="deleteItem(${parseInt(
-        item.id,
-        10
-      )})">✕</div>
-      ${
-        item.photo
-          ? `<img class="clothes-card-img" src="${item.photo}" alt="${esc(
-              item.name
-            )}"/>`
-          : `<div class="clothes-card-placeholder">${
-              CAT_ICON[item.category] || "👔"
-            }</div>`
-      }
-      <div class="clothes-card-body">
-        <div class="clothes-card-name">${esc(item.name)}</div>
-        <div class="clothes-card-meta">
-          <div class="color-dot" style="background:${colorNameToHex(
-            item.color
-          )};"></div>
-          ${esc(item.color)} · ${esc(item.occasion)}
-        </div>
-      </div>
-    </div>`
+      (i) =>
+        '<div class="clothes-card"><div class="clothes-card-del" data-del="' +
+        parseInt(i.id) +
+        '">' +
+        icHTML("trash", "ic-sm") +
+        "</div>" +
+        (i.photo
+          ? '<img class="clothes-card-img" src="' +
+            i.photo +
+            '" alt="' +
+            esc(i.name) +
+            '"/>'
+          : '<div class="clothes-card-placeholder">' +
+            icHTML(ICON_MAP[i.category] || "hanger", "ic-lg") +
+            "</div>") +
+        '<div class="clothes-card-body"><div class="clothes-card-name">' +
+        esc(i.name) +
+        '</div><div class="clothes-card-meta"><div class="color-dot" style="background:' +
+        c2hex(i.color) +
+        '"></div>' +
+        esc(i.color) +
+        " · " +
+        esc(i.occasion) +
+        "</div></div></div>"
     )
     .join("");
 }
-
 async function deleteItem(id) {
-  try {
-    if (state.isOnline) {
+  if (S.online) {
+    try {
       showSync("syncing");
       await API.deleteItem(id);
       showSync("synced");
+    } catch (e) {
+      showSync("error");
+      toast("Delete failed", "error");
+      return;
     }
-    state.wardrobe = state.wardrobe.filter((i) => i.id !== id);
-    renderWardrobe();
-    renderAnalytics();
-    showToast("Item removed");
-  } catch (e) {
-    showSync("error");
-    showToast("Delete failed: " + e.message);
   }
+  S.wardrobe = S.wardrobe.filter((i) => i.id !== id);
+  renderWardrobe();
+  renderAnalytics();
+  toast("Item removed");
 }
-
-// ══════════ ADD ITEM MODAL ══════════
 function openAddModal() {
-  document.getElementById("addModal").classList.add("open");
-  state.itemPhotoB64 = null;
-  const zone = document.getElementById("itemPhotoZone");
-  zone.innerHTML = `<div class="photo-zone-icon">👕</div><div class="photo-zone-text">Upload a photo of your clothing</div><div class="photo-zone-sub">AI will detect type, color & style</div><div class="photo-overlay"><span>🔄 Change Photo</span></div>`;
-  zone.classList.remove("has-photo");
-  document.getElementById("photoDetected").style.display = "none";
-  document.getElementById("analyzingState").classList.remove("show");
-  // Reset photo pane fields
-  ["mi-name", "mi-color", "mi-brand"].forEach(
-    (id) => (document.getElementById(id).value = "")
-  );
-  document.getElementById("mi-cat").selectedIndex = 0;
-  document.getElementById("mi-occasion").selectedIndex = 0;
-  document.getElementById("mi-season").selectedIndex = 0;
-  // Reset manual pane fields
-  ["mn-name", "mn-color", "mn-brand"].forEach(
-    (id) => (document.getElementById(id).value = "")
-  );
-  document.getElementById("mn-cat").selectedIndex = 0;
-  document.getElementById("mn-occasion").selectedIndex = 0;
-  document.getElementById("mn-season").selectedIndex = 0;
-  // Reset to photo tab
-  const photoTab = document.querySelector(".upload-tab");
-  if (photoTab && !photoTab.classList.contains("active")) {
-    switchUploadTab("photo", photoTab);
-  }
+  $("addModal").classList.add("open");
+  S.itemPhoto = null;
+  const z = $("itemPhotoZone");
+  z.innerHTML =
+    '<div class="photo-zone-icon">' +
+    icHTML("upload", "ic-lg") +
+    '</div><div class="photo-zone-text">Upload clothing photo</div><div class="photo-zone-sub">AI detects type, color & style</div><div class="photo-overlay"><span>Change photo</span></div>';
+  z.classList.remove("has-photo");
+  $("photoDetected").style.display = "none";
+  $("analyzingState").classList.remove("show");
+  [
+    "mi-name",
+    "mi-color",
+    "mi-brand",
+    "mn-name",
+    "mn-color",
+    "mn-brand",
+  ].forEach((id) => {
+    const e = $(id);
+    if (e) e.value = "";
+  });
+  [
+    "mi-cat",
+    "mi-occasion",
+    "mi-season",
+    "mn-cat",
+    "mn-occasion",
+    "mn-season",
+  ].forEach((id) => {
+    const e = $(id);
+    if (e) e.selectedIndex = 0;
+  });
 }
-
 function closeAddModal() {
-  document.getElementById("addModal").classList.remove("open");
+  $("addModal").classList.remove("open");
 }
-
-function switchUploadTab(tab, el) {
-  document
-    .querySelectorAll(".upload-tab")
-    .forEach((t) => t.classList.remove("active"));
-  document
-    .querySelectorAll(".upload-pane")
-    .forEach((p) => p.classList.remove("active"));
+function switchTab(t, el) {
+  $$(".upload-tab").forEach((x) => x.classList.remove("active"));
+  $$(".upload-pane").forEach((x) => x.classList.remove("active"));
   el.classList.add("active");
-  document.getElementById("pane-" + tab).classList.add("active");
+  $("pane-" + t).classList.add("active");
 }
-
-async function handleItemPhoto(e) {
-  const file = e.target.files[0];
-  if (!file) return;
-  const src = await compressImage(file, 400, 0.6);
-  const zone = document.getElementById("itemPhotoZone");
-  zone.innerHTML = `<img src="${src}" alt="item" style="width:100%;max-height:220px;object-fit:contain;padding:8px;"/><div class="photo-overlay"><span>🔄 Change</span></div>`;
-  zone.classList.add("has-photo");
-  state.itemPhotoB64 = src;
-
-  // AI clothing analysis via server proxy
-  document.getElementById("analyzingState").classList.add("show");
-  document.getElementById("photoDetected").style.display = "none";
-
-  try {
-    const data = await API.analyzeClothing(src);
-    if (data.detected) {
-      const d = data.detected;
-      if (d.name) document.getElementById("mi-name").value = d.name;
-      if (d.color) document.getElementById("mi-color").value = d.color;
-      if (d.category) document.getElementById("mi-cat").value = d.category;
-      if (d.occasion) document.getElementById("mi-occasion").value = d.occasion;
-      if (d.season) document.getElementById("mi-season").value = d.season;
-      document.getElementById("photoDetected").style.display = "block";
-    }
-  } catch (_) {
-    // Silent — user can still manually fill fields
-  }
-
-  document.getElementById("analyzingState").classList.remove("show");
-}
-
-async function addItem() {
-  const name = document.getElementById("mi-name").value.trim();
+async function addItem(pfx) {
+  const name = $(pfx + "-name").value.trim();
   if (!name) {
-    showToast("Please add a name for this item");
+    toast("Add a name", "error");
     return;
   }
-
   const item = {
     name,
-    category: document.getElementById("mi-cat").value,
-    color: document.getElementById("mi-color").value || "Not specified",
-    occasion: document.getElementById("mi-occasion").value,
-    season: document.getElementById("mi-season").value,
-    brand: document.getElementById("mi-brand").value,
-    photo: state.itemPhotoB64 || null,
+    category: $(pfx + "-cat").value,
+    color: $(pfx + "-color").value || "Not specified",
+    occasion: $(pfx + "-occasion").value,
+    season: $(pfx + "-season").value,
+    brand: $(pfx + "-brand").value,
+    photo: pfx === "mi" ? S.itemPhoto : null,
   };
-
-  try {
-    let id = Date.now(); // fallback ID for offline
-    if (state.isOnline) {
+  let id = Date.now();
+  if (S.online) {
+    try {
       showSync("syncing");
-      const res = await API.addItem(item);
-      id = res.id;
+      const r = await API.addItem(item);
+      id = r.id;
       showSync("synced");
+    } catch (e) {
+      showSync("error");
     }
-    item.id = id;
-    state.wardrobe.unshift(item);
-    renderWardrobe();
-    renderAnalytics();
-    closeAddModal();
-    showToast("Added to your wardrobe ✓");
-  } catch (e) {
-    showSync("error");
-    showToast("Save failed: " + e.message);
   }
+  item.id = id;
+  S.wardrobe.unshift(item);
+  renderWardrobe();
+  renderAnalytics();
+  closeAddModal();
+  toast("Added to wardrobe");
 }
-
-async function addItemManual() {
-  const name = document.getElementById("mn-name").value.trim();
-  if (!name) {
-    showToast("Please enter an item name");
-    return;
-  }
-
-  const item = {
-    name,
-    category: document.getElementById("mn-cat").value,
-    color: document.getElementById("mn-color").value || "Not specified",
-    occasion: document.getElementById("mn-occasion").value,
-    season: document.getElementById("mn-season").value,
-    brand: document.getElementById("mn-brand").value,
-    photo: null,
-  };
-
-  try {
-    let id = Date.now();
-    if (state.isOnline) {
-      showSync("syncing");
-      const res = await API.addItem(item);
-      id = res.id;
-      showSync("synced");
-    }
-    item.id = id;
-    state.wardrobe.unshift(item);
-    renderWardrobe();
-    renderAnalytics();
-    closeAddModal();
-    showToast("Added to your wardrobe ✓");
-  } catch (e) {
-    showSync("error");
-    showToast("Save failed: " + e.message);
-  }
-}
-
-// ══════════ PLANNER ══════════
 async function generatePlan() {
-  const event_ = document.getElementById("pl-event").value.trim();
-  if (!event_) {
-    showToast("Please describe the occasion");
+  const ev = $("pl-event").value.trim();
+  if (!ev) {
+    toast("Describe the occasion", "error");
     return;
   }
-  const weather = document.getElementById("pl-weather").value;
-  const time = document.getElementById("pl-time").value;
-  const mood = state.selectedChips["plmood"] || "";
-
-  const btn = document.getElementById("planBtn");
+  const w = $("pl-weather").value,
+    t = $("pl-time").value,
+    mood = S.chips.plmood || "";
+  const btn = $("planBtn");
   btn.disabled = true;
   btn.textContent = "Styling…";
-  document.getElementById(
-    "planResult"
-  ).innerHTML = `<div class="outfit-result-card"><div class="dots"><span></span><span></span><span></span></div></div>`;
-
+  $("planResult").innerHTML =
+    '<div class="outfit-result-card"><div class="dots"><span></span><span></span><span></span></div></div>';
   try {
-    const messages = [
-      { role: "system", content: buildSystemPrompt() },
+    if (!S.online) throw new Error("Server offline");
+    const msgs = [
+      { role: "system", content: sysPrompt() },
       {
         role: "user",
-        content: `Create a complete outfit for: ${event_}. Weather: ${weather}. Time: ${time}. ${
-          mood ? "Mood/Vibe: " + mood : ""
-        }. Use ONLY wardrobe items I own. Be specific with item names.`,
+        content:
+          "Create outfit for: " +
+          ev +
+          ". Weather:" +
+          w +
+          ". Time:" +
+          t +
+          ". " +
+          (mood ? "Mood:" + mood : "") +
+          ". Use ONLY my items.",
       },
     ];
-    const data = await API.chat(messages);
-    document.getElementById("planResult").innerHTML = `
-      <div class="outfit-result-card">
-        <div class="outfit-result-title">✦ ${event_}</div>
-        <div style="font-size:14px;line-height:1.8;color:var(--ink2);">
-          ${data.reply
-            .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-            .replace(/\n/g, "<br>")}
-        </div>
-      </div>`;
+    const d = await API.chat(msgs);
+    const { cleanText } = parseActions(d.reply);
+    $("planResult").innerHTML =
+      '<div class="outfit-result-card"><div class="outfit-result-title">' +
+      icHTML("sparkle") +
+      " " +
+      esc(ev) +
+      '</div><div style="font-size:14px;line-height:1.8;color:var(--ink2)">' +
+      cleanText
+        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+        .replace(/\n/g, "<br>") +
+      "</div></div>";
   } catch (e) {
-    document.getElementById(
-      "planResult"
-    ).innerHTML = `<div style="color:#ef4444;font-size:13px;padding:16px;">⚠ ${e.message}</div>`;
+    $("planResult").innerHTML =
+      '<div style="color:var(--danger);font-size:13px;padding:16px">' +
+      icHTML("x", "ic-sm") +
+      " " +
+      esc(e.message) +
+      "</div>";
   }
   btn.disabled = false;
   btn.textContent = "Generate Outfit";
 }
-
-// ══════════ ANALYTICS ══════════
 function renderAnalytics() {
-  const w = state.wardrobe;
-  const sr = document.getElementById("statsRow");
+  const w = S.wardrobe,
+    sr = $("statsRow");
   if (!sr) return;
-
-  const cats = [...new Set(w.map((i) => i.category))].length;
-  const occ = [...new Set(w.map((i) => i.occasion))].length;
-  const colors = [...new Set(w.map((i) => (i.color || "").toLowerCase()))]
-    .length;
-
-  sr.innerHTML = `
-    <div class="stat-box"><div class="stat-num">${w.length}</div><div class="stat-label">Items</div></div>
-    <div class="stat-box"><div class="stat-num">${cats}</div><div class="stat-label">Categories</div></div>
-    <div class="stat-box"><div class="stat-num">${occ}</div><div class="stat-label">Occasions</div></div>
-    <div class="stat-box"><div class="stat-num">${colors}</div><div class="stat-label">Colours</div></div>`;
-
-  const catCount = {};
-  w.forEach((i) => (catCount[i.category] = (catCount[i.category] || 0) + 1));
-  const occCount = {};
-  w.forEach((i) => (occCount[i.occasion] = (occCount[i.occasion] || 0) + 1));
-
-  renderBars(catCount, "catBars");
-  renderBars(occCount, "occBars");
+  sr.innerHTML =
+    '<div class="stat-box"><div class="stat-num">' +
+    w.length +
+    '</div><div class="stat-label">Items</div></div><div class="stat-box"><div class="stat-num">' +
+    [...new Set(w.map((i) => i.category))].length +
+    '</div><div class="stat-label">Categories</div></div><div class="stat-box"><div class="stat-num">' +
+    [...new Set(w.map((i) => i.occasion))].length +
+    '</div><div class="stat-label">Occasions</div></div><div class="stat-box"><div class="stat-num">' +
+    [...new Set(w.map((i) => (i.color || "").toLowerCase()))].length +
+    '</div><div class="stat-label">Colours</div></div>';
+  const cc = {},
+    oc = {};
+  w.forEach((i) => {
+    cc[i.category] = (cc[i.category] || 0) + 1;
+    oc[i.occasion] = (oc[i.occasion] || 0) + 1;
+  });
+  bars(cc, "catBars");
+  bars(oc, "occBars");
 }
-
-function renderBars(counts, containerId) {
-  const max = Math.max(...Object.values(counts), 1);
-  const el = document.getElementById(containerId);
+function bars(counts, id) {
+  const mx = Math.max(...Object.values(counts), 1),
+    el = $(id);
   if (!el) return;
   if (!Object.keys(counts).length) {
-    el.innerHTML = `<div style="font-size:13px;color:var(--muted);">No data yet</div>`;
+    el.innerHTML =
+      '<div style="font-size:12px;color:var(--muted)">No data yet</div>';
     return;
   }
   el.innerHTML = Object.entries(counts)
     .map(
-      ([k, v]) => `
-    <div class="bar-item">
-      <div class="bar-label">${k}</div>
-      <div class="bar-track"><div class="bar-fill" style="width:${Math.round(
-        (v / max) * 100
-      )}%"></div></div>
-      <div class="bar-count">${v}</div>
-    </div>`
+      ([k, v]) =>
+        '<div class="bar-item"><div class="bar-label">' +
+        esc(k) +
+        '</div><div class="bar-track"><div class="bar-fill" style="width:' +
+        Math.round((v / mx) * 100) +
+        '%"></div></div><div class="bar-count">' +
+        v +
+        "</div></div>"
     )
     .join("");
 }
-
 async function runAnalysis() {
-  if (!state.wardrobe.length) {
-    showToast("Add some items to your wardrobe first");
+  if (!S.wardrobe.length) {
+    toast("Add items first", "error");
     return;
   }
-  const container = document.getElementById("aiAnalysis");
-  container.innerHTML = `<div class="dots" style="margin:8px 0"><span></span><span></span><span></span></div>`;
-
+  const c = $("aiAnalysis");
+  c.innerHTML =
+    '<div class="dots" style="margin:8px 0"><span></span><span></span><span></span></div>';
   try {
-    const messages = [
-      { role: "system", content: buildSystemPrompt() },
+    if (!S.online) throw new Error("Server offline");
+    const msgs = [
+      { role: "system", content: sysPrompt() },
       {
         role: "user",
         content:
-          "Analyse my wardrobe. Give me: 1) What it's strong at 2) Top 3 missing essentials I should buy 3) Colour gaps 4) One versatility tip. Be specific and personal.",
+          "Analyse my wardrobe: 1)Strengths 2)Top 3 missing 3)Colour gaps 4)Versatility tip.",
       },
     ];
-    const data = await API.chat(messages);
-    container.innerHTML = `<div style="font-size:14px;line-height:1.8;color:var(--ink2);">${data.reply
-      .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-      .replace(/\n/g, "<br>")}</div>`;
+    const d = await API.chat(msgs);
+    const { cleanText } = parseActions(d.reply);
+    c.innerHTML =
+      '<div style="font-size:14px;line-height:1.8;color:var(--ink2)">' +
+      cleanText
+        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+        .replace(/\n/g, "<br>") +
+      "</div>";
   } catch (e) {
-    container.innerHTML = `<div style="color:#ef4444;font-size:13px;">⚠ ${e.message}</div><button class="btn-ghost" onclick="runAnalysis()" style="margin-top:12px;">Try again</button>`;
+    c.innerHTML =
+      '<div style="color:var(--danger);font-size:13px">' +
+      icHTML("x", "ic-sm") +
+      " " +
+      esc(e.message) +
+      '</div><button class="btn-ghost" id="btnRetryAnalysis" style="margin-top:12px">Try again</button>';
   }
 }
-
-// ══════════ PROFILE PAGE ══════════
 function loadProfilePage() {
-  const p = state.profile;
+  const p = S.profile;
   if (!p) return;
-  document.getElementById("pr-name").value = p.name || "";
-  document.getElementById("pr-age").value = p.age || "";
-  document.getElementById("pr-gender").value = p.gender || "";
-  document.getElementById("pr-height").value = p.height || "";
-  document.getElementById("pr-build").value = p.build || "";
-  document.getElementById("pr-skin").value = p.skin || "";
-  document.getElementById("pr-style").value = p.style || "";
-  document.getElementById("pr-lifestyle").value = p.lifestyle || "";
-  document.getElementById("pr-location").value = p.location || "";
-  document.getElementById("profileDisplayName").textContent =
-    p.name || "My Profile";
-  document.getElementById("profileDisplayMeta").textContent =
+  $("pr-name").value = p.name || "";
+  $("pr-age").value = p.age || "";
+  $("pr-gender").value = p.gender || "";
+  $("pr-height").value = p.height || "";
+  $("pr-build").value = p.build || "";
+  $("pr-skin").value = p.skin || "";
+  $("pr-style").value = p.style || "";
+  $("pr-lifestyle").value = p.lifestyle || "";
+  $("pr-location").value = p.location || "";
+  $("profileDisplayName").textContent = p.name || "My Profile";
+  $("profileDisplayMeta").textContent =
     [p.style, p.lifestyle].filter(Boolean).join(" · ") ||
     "Update your style details";
-  document.getElementById("profileDeviceId").textContent =
-    "Device: " + state.deviceId.slice(0, 12) + "…";
-
-  const av = document.getElementById("profileAvatar");
+  $("profileDeviceId").textContent = "Device: " + S.deviceId.slice(0, 12) + "…";
+  const av = $("profileAvatar");
   if (p.photo)
-    av.innerHTML = `<img src="${p.photo}" style="width:100%;height:100%;object-fit:cover;"/>`;
+    av.innerHTML =
+      '<img src="' +
+      p.photo +
+      '" style="width:100%;height:100%;object-fit:cover"/>';
   else av.textContent = p.name ? p.name[0].toUpperCase() : "?";
 }
-
-function handleProfilePhotoEdit(e) {
-  const file = e.target.files[0];
-  if (!file) return;
-  compressImage(file, 600, 0.7).then((src) => {
-    state.profile.photo = src;
-    document.getElementById(
-      "profileAvatar"
-    ).innerHTML = `<img src="${src}" style="width:100%;height:100%;object-fit:cover;"/>`;
-    updateNavAvatar();
-  });
-}
-
 async function saveProfileEdit() {
-  const p = state.profile || {};
-  p.name = document.getElementById("pr-name").value;
-  p.age = document.getElementById("pr-age").value || null;
-  p.gender = document.getElementById("pr-gender").value;
-  p.height = document.getElementById("pr-height").value;
-  p.build = document.getElementById("pr-build").value;
-  p.skin = document.getElementById("pr-skin").value;
-  p.style = document.getElementById("pr-style").value;
-  p.lifestyle = document.getElementById("pr-lifestyle").value;
-  p.location = document.getElementById("pr-location").value;
-  state.profile = p;
-
-  try {
-    if (state.isOnline) {
+  const p = S.profile || {};
+  p.name = $("pr-name").value;
+  p.age = $("pr-age").value || null;
+  p.gender = $("pr-gender").value;
+  p.height = $("pr-height").value;
+  p.build = $("pr-build").value;
+  p.skin = $("pr-skin").value;
+  p.style = $("pr-style").value;
+  p.lifestyle = $("pr-lifestyle").value;
+  p.location = $("pr-location").value;
+  S.profile = p;
+  if (S.online) {
+    try {
       showSync("syncing");
       await API.saveProfile(p);
       showSync("synced");
+    } catch (_) {
+      showSync("error");
     }
-    updateNavAvatar();
-    loadProfilePage();
-    updateHeroName();
-    showToast("Profile updated ✓");
-  } catch (e) {
-    showSync("error");
-    showToast("Save failed: " + e.message);
   }
+  updateAvatar();
+  loadProfilePage();
+  updateHero();
+  toast("Profile updated");
 }
-
-// ══════════ DEVICE PAIRING ══════════
 function openPairModal(mode) {
-  const overlay = document.getElementById("pairOverlay");
-  const pairInput = document.getElementById("pairInput");
-  const pairCode = document.getElementById("pairCode");
-  const pairSub = document.getElementById("pairSub");
-  const pairTimer = document.getElementById("pairTimer");
-
-  overlay.classList.add("open");
-
+  const ov = $("pairOverlay"),
+    pi = $("pairInput"),
+    pc = $("pairCode"),
+    ps = $("pairSub"),
+    pt = $("pairTimer");
+  ov.classList.add("open");
   if (mode === "generate") {
-    pairInput.style.display = "none";
-    pairCode.textContent = "······";
-    pairSub.textContent = "Generating pairing code…";
-    pairTimer.textContent = "";
-
-    API.generatePairCode()
+    pi.style.display = "none";
+    pc.textContent = "······";
+    ps.textContent = "Generating…";
+    pt.textContent = "";
+    if (!S.online) {
+      ps.textContent = "Server offline — pairing unavailable";
+      return;
+    }
+    API.genPair()
       .then(({ token, expiresAt }) => {
-        pairCode.textContent = token;
-        pairCode.style.opacity = "1";
-        pairSub.textContent = "Share this code to link another device";
-
-        if (state.pairInterval) clearInterval(state.pairInterval);
-        state.pairInterval = setInterval(() => {
-          const remaining = Math.max(
+        pc.textContent = token;
+        pc.style.opacity = "1";
+        ps.textContent = "Share this code with your other device";
+        if (S.pairInt) clearInterval(S.pairInt);
+        S.pairInt = setInterval(() => {
+          const rem = Math.max(
             0,
             Math.floor((new Date(expiresAt) - Date.now()) / 1000)
           );
-          const m = Math.floor(remaining / 60);
-          const s = remaining % 60;
-          pairTimer.textContent = `Expires in ${m}:${String(s).padStart(
-            2,
-            "0"
-          )}`;
-          if (remaining <= 0) {
-            clearInterval(state.pairInterval);
-            pairTimer.textContent = "Expired — generate a new code";
-            pairCode.style.opacity = "0.4";
+          pt.textContent =
+            "Expires " +
+            Math.floor(rem / 60) +
+            ":" +
+            String(rem % 60).padStart(2, "0");
+          if (rem <= 0) {
+            clearInterval(S.pairInt);
+            pt.textContent = "Expired";
+            pc.style.opacity = ".4";
           }
         }, 1000);
       })
       .catch((e) => {
-        pairSub.textContent = "Error: " + e.message;
+        ps.textContent = "Error: " + e.message;
       });
   } else {
-    pairInput.style.display = "block";
-    pairCode.textContent = "🔗";
-    pairSub.textContent = "Enter the code from your other device";
-    pairTimer.textContent = "";
-    document.getElementById("pairCodeInput").value = "";
-    setTimeout(() => document.getElementById("pairCodeInput").focus(), 100);
+    pi.style.display = "block";
+    pc.textContent = "";
+    pc.innerHTML = icHTML("link", "ic-xl");
+    ps.textContent = "Enter code from other device";
+    pt.textContent = "";
+    $("pairCodeInput").value = "";
+    setTimeout(() => $("pairCodeInput").focus(), 100);
   }
 }
-
 function closePairModal() {
-  document.getElementById("pairOverlay").classList.remove("open");
-  if (state.pairInterval) clearInterval(state.pairInterval);
+  $("pairOverlay").classList.remove("open");
+  if (S.pairInt) clearInterval(S.pairInt);
 }
-
 async function submitPairCode() {
-  const code = document.getElementById("pairCodeInput").value.trim();
+  const code = $("pairCodeInput").value.trim();
   if (!code || code.length < 6) {
-    showToast("Enter the full 6-character code");
+    toast("Enter full 6-char code", "error");
     return;
   }
-
   try {
-    await API.consumePairCode(code);
-    showToast("Device linked! Reloading…");
+    await API.usePair(code);
+    toast("Device linked!");
     closePairModal();
-
-    // Reload all data from linked account
-    const profileData = await API.getProfile();
-    state.profile = profileData.profile;
-    const wardrobeData = await API.getWardrobe();
-    state.wardrobe = wardrobeData.items || [];
-
-    if (state.profile) launchApp();
-    else showToast("Linked device has no profile yet");
+    S.profile = (await API.getProfile()).profile;
+    S.wardrobe = (await API.getWardrobe()).items || [];
+    if (S.profile) launch();
   } catch (e) {
-    showToast("Pairing failed: " + e.message);
+    toast("Failed: " + e.message, "error");
   }
 }
 
-// ══════════ INIT ══════════
-window.addEventListener("DOMContentLoaded", () => boot());
+// ═══ EVENT BINDING ═══
+function bindEvents() {
+  $("btnBegin").addEventListener("click", () => goObStep(2));
+  $("btnOb2Back").addEventListener("click", () => goObStep(1));
+  $("btnOb2Next").addEventListener("click", () => goObStep(3));
+  $("btnOb3Back").addEventListener("click", () => goObStep(2));
+  $("finishBtn").addEventListener("click", finishOnboarding);
+  $("btnLinkOnboarding").addEventListener("click", () => openPairModal("join"));
+  $("profilePhotoZone").addEventListener("click", () =>
+    $("profilePhotoInput").click()
+  );
+  $("profilePhotoInput").addEventListener("change", (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    compress(f, 600, 0.7).then((d) => {
+      const z = $("profilePhotoZone");
+      z.innerHTML =
+        '<img src="' +
+        d +
+        '" alt="Profile"/><div class="photo-overlay"><span>Change photo</span></div>';
+      z.classList.add("has-photo");
+      S.profilePhoto = d;
+    });
+  });
+  // Delegated events
+  document.addEventListener("click", (e) => {
+    const chip = e.target.closest("[data-chip]");
+    if (chip) {
+      handleChipClick(chip);
+      return;
+    }
+    const page = e.target.closest("[data-page]");
+    if (page) {
+      showPage(page.dataset.page, page);
+      return;
+    }
+    const ask = e.target.closest("[data-ask]");
+    if (ask) {
+      quickAsk(ask.dataset.ask);
+      return;
+    }
+    const filt = e.target.closest("[data-filter]");
+    if (filt) {
+      wFilter = filt.dataset.filter;
+      $$(".filter-pill").forEach((x) => x.classList.remove("active"));
+      filt.classList.add("active");
+      renderWardrobe();
+      return;
+    }
+    const del = e.target.closest("[data-del]");
+    if (del) {
+      deleteItem(parseInt(del.dataset.del));
+      return;
+    }
+    const tab = e.target.closest("[data-tab]");
+    if (tab) {
+      switchTab(tab.dataset.tab, tab);
+      return;
+    }
+    const act = e.target.closest("[data-action]");
+    if (act) {
+      const a = ACTION_MAP[act.dataset.action];
+      if (a) a.fn();
+      return;
+    }
+    if (e.target.closest("#btnRetryAnalysis")) runAnalysis();
+  });
+  $("navAvatar").addEventListener("click", () => showPage("profile", null));
+  $("btnPairNav").addEventListener("click", () => openPairModal("generate"));
+  $("chatInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendChat();
+    }
+  });
+  $("chatInput").addEventListener("input", function () {
+    this.style.height = "auto";
+    this.style.height = Math.min(this.scrollHeight, 120) + "px";
+  });
+  $("sendBtn").addEventListener("click", sendChat);
+  $("btnAddItem").addEventListener("click", openAddModal);
+  $("btnCloseModal").addEventListener("click", closeAddModal);
+  $("itemPhotoZone").addEventListener("click", () =>
+    $("itemPhotoInput").click()
+  );
+  $("itemPhotoInput").addEventListener("change", async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const src = await compress(f, 400, 0.6);
+    const z = $("itemPhotoZone");
+    z.innerHTML =
+      '<img src="' +
+      src +
+      '" alt="item" style="width:100%;max-height:200px;object-fit:contain;padding:8px"/><div class="photo-overlay"><span>Change photo</span></div>';
+    z.classList.add("has-photo");
+    S.itemPhoto = src;
+  });
+  $("btnAddPhoto").addEventListener("click", () => addItem("mi"));
+  $("btnAddManual").addEventListener("click", () => addItem("mn"));
+  $("planBtn").addEventListener("click", generatePlan);
+  $("btnAnalyse").addEventListener("click", runAnalysis);
+  $("profileAvatarWrap").addEventListener("click", () =>
+    $("profileEditPhoto").click()
+  );
+  $("profileEditPhoto").addEventListener("change", (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    compress(f, 600, 0.7).then((src) => {
+      S.profile.photo = src;
+      $("profileAvatar").innerHTML =
+        '<img src="' +
+        src +
+        '" style="width:100%;height:100%;object-fit:cover"/>';
+      updateAvatar();
+    });
+  });
+  $("btnSaveProfile").addEventListener("click", saveProfileEdit);
+  $("btnGenCode").addEventListener("click", () => openPairModal("generate"));
+  $("btnLinkDevice").addEventListener("click", () => openPairModal("join"));
+  $("btnClosePair").addEventListener("click", closePairModal);
+  $("btnSubmitPair").addEventListener("click", submitPairCode);
+  $("pairCodeInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submitPairCode();
+  });
+}
+document.addEventListener("DOMContentLoaded", () => {
+  bindEvents();
+  boot();
+});
