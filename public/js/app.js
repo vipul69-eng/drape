@@ -88,17 +88,29 @@ const ACTION_MAP={
 
 // Suggestions based on context
 const FOLLOW_UPS={
-  outfit:['What shoes go with this?','Any accessories to add?','Show me alternatives'],
-  buy:['Where can I find these?','What brands do you recommend?','Set a budget for me'],
+  outfit:['What shoes go with this?','Any accessories to add?','Show me alternatives','Is this weather-appropriate?'],
+  alternatives:['Something more casual?','A bolder option?','What about a different color scheme?'],
+  buy:['Where can I find these?','What brands do you recommend?','Budget-friendly options?'],
   color:['Show outfits in these colors','What colors to avoid?','Seasonal color tips'],
-  general:['Plan an outfit for tonight','What am I missing?','Analyse my wardrobe'],
+  style:['How to dress for my body type?','What trends suit me?','Build a capsule wardrobe'],
+  general:['What should I wear today?','Analyse my wardrobe','Help me plan an outfit'],
+  casual:['What should I wear today?','Any style tips?','What am I missing in my wardrobe?'],
 };
 
 function detectContext(text){
   const t=text.toLowerCase();
-  if(t.includes('wear')||t.includes('outfit')||t.includes('top:')||t.includes('bottom:'))return'outfit';
-  if(t.includes('buy')||t.includes('missing')||t.includes('essential')||t.includes('add'))return'buy';
-  if(t.includes('color')||t.includes('colour')||t.includes('tone'))return'color';
+  // Check if this is an outfit recommendation (has the Top:/Bottom: format)
+  if(/\*\*(top|bottom|shoes|extra|layers):\*\*/i.test(t))return'outfit';
+  // Alternatives / different suggestions
+  if(t.includes('alternative')||t.includes('instead')||t.includes('different')||t.includes('other option'))return'alternatives';
+  // Shopping / buying
+  if(t.includes('buy')||t.includes('missing')||t.includes('essential')||t.includes('shop')||t.includes('purchase'))return'buy';
+  // Color advice
+  if(t.includes('color')||t.includes('colour')||t.includes('tone')||t.includes('palette'))return'color';
+  // Style / fashion advice (no specific items)
+  if(t.includes('style')||t.includes('trend')||t.includes('fashion')||t.includes('body type')||t.includes('capsule'))return'style';
+  // Short/casual responses (thank you, ok, etc.)
+  if(t.length<120)return'casual';
   return'general';
 }
 
@@ -106,11 +118,16 @@ function findMentionedItems(text){
   if(!S.wardrobe.length)return[];
   const lower=text.toLowerCase();
   return S.wardrobe.filter(item=>{
-    const name=item.name.toLowerCase();
-    // Match if AI mentioned the item name (at least 2-word overlap or exact)
-    const words=name.split(/\s+/);
-    if(words.length<=1) return lower.includes(name);
-    return words.filter(w=>w.length>2&&lower.includes(w)).length>=Math.min(2,words.length);
+    const name=item.name.toLowerCase().trim();
+    if(!name)return false;
+    // Exact full name match (strongest signal)
+    if(lower.includes(name))return true;
+    // For multi-word names, require ALL significant words (3+ chars) to appear
+    const words=name.split(/\s+/).filter(w=>w.length>=3);
+    if(words.length<2)return false;
+    const matched=words.filter(w=>lower.includes(w));
+    // Require all significant words to match, not just 2
+    return matched.length>=words.length;
   }).slice(0,6);
 }
 
@@ -123,26 +140,33 @@ function parseActions(text){
 function sysPrompt(){
   const p=S.profile||{};
   const w=S.wardrobe.length?S.wardrobe.map(i=>'- '+i.name+' ('+i.category+', '+i.color+', '+i.occasion+')').join('\n'):'No items yet.';
-  return `You are DRAPE, a warm personal AI stylist. Give specific, actionable fashion advice.
+  return `You are DRAPE, a warm personal AI stylist. Be conversational and helpful.
 
 USER: ${p.name||'—'} | Age:${p.age||'—'} | Gender:${p.gender||'—'} | Height:${p.height||'—'} | Build:${p.build||'—'} | Skin:${p.skin||'—'} | Style:${p.style||'—'} | Lifestyle:${p.lifestyle||'—'} | Location:${p.location||'—'}
 
 WARDROBE (${S.wardrobe.length} items):
 ${w}
 
-RULES:
-- Only suggest items the user owns. Name them EXACTLY as listed.
-- Format outfits: **Top:** / **Bottom:** / **Shoes:** / **Extra:**
-- Be warm, personal, use their name occasionally.
-- Keep responses concise but complete.
+RESPONSE RULES:
+1. READ THE USER'S INTENT CAREFULLY before responding:
+   - If they ask for an OUTFIT → suggest specific items using **Top:** / **Bottom:** / **Shoes:** / **Extra:** format
+   - If they ask for ALTERNATIVES → suggest DIFFERENT items than what was previously recommended. Never repeat the same outfit.
+   - If they ask about colors, style tips, trends, body type, etc. → give advice in natural prose. Do NOT format as an outfit.
+   - If they say thanks, ask a general question, or just chat → respond naturally. No outfit needed.
+   - If they ask about shopping/what to buy → give purchase advice without outfit format.
 
-ACTIONS: After your response, append relevant action tags on a new line:
-[ACTION:GO_WARDROBE] - when referencing their wardrobe
-[ACTION:ADD_ITEM] - when suggesting buying/adding items
-[ACTION:GO_PLANNER] - when suggesting outfit planning
+2. Only suggest items from the wardrobe list above. Name them EXACTLY as listed.
+3. Be warm, personal, use their name occasionally.
+4. Keep responses concise.
+5. NEVER use the **Top:**/**Bottom:** format unless the user is actually asking for an outfit to wear.
+
+ACTIONS: After your response, append relevant action tags ONLY when genuinely useful:
+[ACTION:GO_WARDROBE] - when they should browse their wardrobe
+[ACTION:ADD_ITEM] - when suggesting buying new items
+[ACTION:GO_PLANNER] - when suggesting outfit planning for an event
 [ACTION:GO_PROFILE] - when suggesting profile updates
 [ACTION:GO_INSIGHTS] - when mentioning wardrobe analysis
-Include only genuinely relevant actions.`;
+Do NOT add actions to casual/conversational responses.`;
 }
 
 async function sendChat(){
@@ -177,11 +201,13 @@ function renderAIMsg(txt,actions){
   const c=$('chatMessages'),row=document.createElement('div');row.className='msg-row ai';
   const av=document.createElement('div');av.className='msg-ava ai-ava';av.textContent='D';
   const b=document.createElement('div');b.className='msg-bubble';
-  const mentioned=findMentionedItems(txt);
-  const hasOutfit=/\*\*(Top|Bottom|Shoes|Extra|Layers|Accessories):\*\*/i.test(txt);
 
-  if(mentioned.length>0 && hasOutfit){
-    // ── VISUAL OUTFIT BOARD ──
+  // Only look for mentioned items if the response is actually recommending an outfit
+  const hasOutfitFormat=/\*\*(Top|Bottom|Shoes|Extra|Layers|Accessories):\*\*/i.test(txt);
+  const mentioned=hasOutfitFormat?findMentionedItems(txt):[];
+
+  if(mentioned.length>0 && hasOutfitFormat){
+    // ── VISUAL OUTFIT BOARD — only when AI is giving a structured outfit ──
     const introMatch=txt.match(/^([\s\S]*?)(?=\*\*(?:Top|Bottom|Shoes|Extra|Layers|Accessories):)/i);
     if(introMatch&&introMatch[1].trim()){
       const intro=document.createElement('div');intro.className='outfit-intro';
@@ -206,20 +232,19 @@ function renderAIMsg(txt,actions){
     board.appendChild(det);
     b.appendChild(board);
   } else {
-    // ── REGULAR RESPONSE WITH INLINE CARDS ──
+    // ── REGULAR TEXT RESPONSE — no item cards for non-outfit responses ──
     b.innerHTML=txt.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>');
-    if(mentioned.length){
-      const strip=document.createElement('div');strip.className='outfit-items-row';
-      mentioned.forEach(item=>{
-        const card=document.createElement('div');card.className='outfit-item-card';
-        card.innerHTML=(item.photo?'<div class="card-thumb"><img src="'+item.photo+'" alt="'+esc(item.name)+'"/></div>':'<div class="card-thumb">'+icHTML(ICON_MAP[item.category]||'hanger','ic-lg')+'</div>')+'<div class="card-label">'+esc(item.name)+'</div><div class="card-meta">'+esc(item.color)+'</div>';
-        strip.appendChild(card);
-      });
-      b.appendChild(strip);
-    }
   }
   if(actions&&actions.length){const bar=document.createElement('div');bar.className='action-bar';actions.forEach(key=>{const a=ACTION_MAP[key];if(!a)return;const btn=document.createElement('button');btn.className='action-btn';btn.dataset.action=key;btn.innerHTML=icHTML(a.icon,'ic-sm')+' '+a.label;bar.appendChild(btn)});b.appendChild(bar)}
-  const ctx=detectContext(txt);const suggestions=FOLLOW_UPS[ctx]||FOLLOW_UPS.general;const chips=document.createElement('div');chips.className='suggestion-chips';suggestions.forEach(s=>{const chip=document.createElement('button');chip.className='suggestion-chip';chip.dataset.ask=s;chip.innerHTML=icHTML('sparkle','ic-sm')+' '+s;chips.appendChild(chip)});b.appendChild(chips);
+  // Smart suggestion chips — pick from context pool, shuffle, limit to 3
+  const ctx=detectContext(txt);
+  const pool=FOLLOW_UPS[ctx]||FOLLOW_UPS.general;
+  const shuffled=[...pool].sort(()=>Math.random()-.5).slice(0,3);
+  if(shuffled.length&&txt.length>50){
+    const chips=document.createElement('div');chips.className='suggestion-chips';
+    shuffled.forEach(s=>{const chip=document.createElement('button');chip.className='suggestion-chip';chip.dataset.ask=s;chip.innerHTML=icHTML('sparkle','ic-sm')+' '+s;chips.appendChild(chip)});
+    b.appendChild(chips);
+  }
   row.appendChild(av);row.appendChild(b);c.appendChild(row);scrollToLatest();
 }
 
